@@ -10,6 +10,7 @@
 
 module Main where
 
+import Control.Monad (when)
 import Data.GI.Base (get, on)
 import qualified GI.Gtk as Gtk (Box, Label, mainQuit, onWidgetDestroy, gridSetRowSpacing, gridNew, widgetDestroy, onWidgetDestroy, widgetSetHexpand, gridSetColumnHomogeneous, gridSetColumnSpacing, buttonSetRelief, buttonSetLabel, boxNew, buttonNew, boxPackStart, labelNew, labelSetMarkup, labelSetXalign, labelSetYalign, styleContextAddProviderForScreen, init, windowNew, setContainerBorderWidth, setWindowTitle, setWindowResizable, setWindowDefaultWidth, setWindowDefaultHeight, setWindowWindowPosition, cssProviderNew, cssProviderLoadFromData, windowSetDecorated, widgetSetName, widgetGetStyleContext, styleContextAddClass, main, pattern ReliefStyleNone, pattern OrientationHorizontal, pattern OrientationVertical, pattern WindowTypeToplevel, pattern WindowPositionCenter, pattern STYLE_PROVIDER_PRIORITY_USER)
 import GI.Gdk (screenGetDefault, keyvalToUnicode)
@@ -471,7 +472,7 @@ main = do
 
   on win #keyPressEvent $ \keyEvent -> do
     key <- keyEvent `Data.GI.Base.get` #keyval >>= keyvalToUnicode
-    if key == 27 then Gtk.mainQuit else pure ()
+    when (key == 27) Gtk.mainQuit
     return False
 
   Gtk.onWidgetDestroy win Gtk.mainQuit
