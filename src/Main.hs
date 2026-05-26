@@ -11,15 +11,11 @@
 module Main where
 
 import Data.GI.Base (get, on)
-import qualified GI.Gtk as Gtk (mainQuit, onWidgetDestroy, gridSetRowSpacing, gridNew, widgetDestroy, onWidgetDestroy, widgetSetHexpand, gridSetColumnHomogeneous, gridSetColumnSpacing, buttonSetRelief, boxNew, setBoxHomogeneous, buttonNew, buttonSetImage, boxPackStart, getTextViewBuffer, textViewNew, labelNew, labelSetMarkup, styleContextAddProviderForScreen, textViewSetEditable, textBufferSetText, textViewGetBuffer, init, windowNew, textBufferGetText, imageNewFromFile, cssProviderLoadFromData, textBufferGetStartIter, textBufferGetEndIter, setContainerBorderWidth, setWindowTitle, setWindowResizable, setWindowDefaultWidth, setWindowDefaultHeight, setWindowWindowPosition, cssProviderNew, windowSetDecorated, main, pattern ReliefStyleNone, pattern OrientationHorizontal, pattern WindowTypeToplevel, pattern WindowPositionCenter, pattern STYLE_PROVIDER_PRIORITY_USER)
+import qualified GI.Gtk as Gtk (Box, Label, mainQuit, onWidgetDestroy, gridSetRowSpacing, gridNew, widgetDestroy, onWidgetDestroy, widgetSetHexpand, gridSetColumnHomogeneous, gridSetColumnSpacing, buttonSetRelief, buttonSetLabel, boxNew, buttonNew, boxPackStart, labelNew, labelSetMarkup, labelSetXalign, labelSetYalign, styleContextAddProviderForScreen, init, windowNew, setContainerBorderWidth, setWindowTitle, setWindowResizable, setWindowDefaultWidth, setWindowDefaultHeight, setWindowWindowPosition, cssProviderNew, cssProviderLoadFromData, windowSetDecorated, widgetSetName, widgetGetStyleContext, styleContextAddClass, main, pattern ReliefStyleNone, pattern OrientationHorizontal, pattern OrientationVertical, pattern WindowTypeToplevel, pattern WindowPositionCenter, pattern STYLE_PROVIDER_PRIORITY_USER)
 import GI.Gdk (screenGetDefault, keyvalToUnicode)
-import System.Directory (getHomeDirectory)
-import System.Posix.User (getEffectiveUserName)
-import Data.Char (chr)
 import Data.Aeson (eitherDecode, encode, eitherDecodeStrict)
 import Data.Aeson.Types (ToJSON, FromJSON, Value, parseJSON, parseMaybe)
 import GHC.Generics (Generic)
-import Data.String ( fromString )
 import Network.HTTP.Req (JsonResponse, jsonResponse, responseBody, (/:), defaultHttpConfig, (=:), https, runReq, req, pattern NoReqBody, pattern GET)
 import qualified Data.ByteString.Lazy.UTF8 as BLU (fromString, toString)
 import Data.Text (pack, unpack)
@@ -185,41 +181,6 @@ type ObservationSchema = [schema|
 }
 |]
 
--- newtype Observations = Observations
---   { observations :: [Observation]
---   } deriving (Show, Generic, Eq, ToJSON, FromJSON, Typeable)
-
--- data Imperial = Imperial {
---   temp :: Integer,
---   heatIndex :: Integer,
---   dewpt :: Integer,
---   windChill :: Integer,
---   windSpeed :: Integer,
---   windGust :: Integer,
---   pressure :: Double,
---   precipRate :: Double,
---   precipTotal :: Double,
---   elev :: Integer
--- } deriving (Show, Generic, Eq, ToJSON, FromJSON, Typeable)
-
--- data Observation  = Observation {
---   stationID :: String,
---   obsTimeUtc :: String,
---   neighborhood :: String,
---   softwareType :: Maybe String,
---   country:: String,
---   solarRadiation :: Double,
---   lon :: Double,
---   realtimeFrequency :: Maybe String,
---   epoch :: Integer,
---   lat :: Double,
---   uv :: Integer,
---   winddir :: Integer,
---   humidity :: Integer,
---   qcStatus :: Integer,
---   imperial :: Imperial
--- } deriving (Show, Generic, Eq, ToJSON, FromJSON, Typeable)
-
 data Weather = Weather {
     id:: String,
      observation3:: V3WxObservationsCurrent
@@ -282,6 +243,10 @@ fromIntJust :: Maybe Int -> Int
 fromIntJust (Just x) = x
 fromIntJust Nothing = 0
 
+firstOf :: [a] -> a
+firstOf (x:_) = x
+firstOf [] = error "firstOf: empty API response list"
+
 apiKey :: String
 apiKey = "e1f10a1e78da46f5b10a1e78da96f525"
 
@@ -307,7 +272,6 @@ astroApi = do
       "days" =: ("1" :: String) <>
       "date" =: (formatTime defaultTimeLocale "%Y%m%d" now :: String) <>
       "format" =: ("json" :: String)
-    -- print (responseBody response :: Value)
     return (responseBody response)
 
 weatherApi :: IO Value
@@ -334,18 +298,6 @@ getWeather = do
 fromJSONValue :: FromJSON a => Value -> Maybe a
 fromJSONValue = parseMaybe parseJSON
 
--- TODO: modify
--- getObservation :: IO Observation
--- getObservation = do
---   payload <- getWeather
---   print . typeOf $ payload
---   let justObservations = fromJSONValue payload :: Maybe Observations
---   let observationList = (fromJust (justObservations))
---   let list = (observations observationList)
---   let observation = (head list)
---   let imperialData = (imperial observation)
---   return observation
-
 getApiWeather :: IO Weather
 getApiWeather = do
   payload <- weatherApi
@@ -355,10 +307,10 @@ getApiWeather = do
 
 replace :: Eq a => [a] -> [a] -> [a] -> [a]
 replace [] _ _ = []
-replace s find repl =
+replace s@(x:xs) find repl =
     if take (length find) s == find
         then repl ++ replace (drop (length find) s) find repl
-        else head s : replace (tail s) find repl
+        else x : replace xs find repl
 
 getAstroObservation :: IO (Object AstroSchema)
 getAstroObservation = do
@@ -369,37 +321,57 @@ getAstroObservation = do
 getWeatherObservation :: IO (Object WeatherSchema)
 getWeatherObservation = do
   payload <- weatherApi
-  let myPayload = Data.Aeson.encode payload -- (BL.ByteString)
+  let myPayload = Data.Aeson.encode payload
   let payloadUpdated = BLU.toString myPayload
   let payloadFinal = replace payloadUpdated "v3-wx-observations-current" "currentObservation"
   let payloadx = BLU.fromString  ("{\"values\": " ++ payloadFinal ++ "}")
   either fail return $ eitherDecode payloadx :: IO (Object WeatherSchema)
 
--- styles :: Data.ByteString.Internal.ByteString
+-- Extract HH:MM from ISO local time string like "2024-05-17T05:45:00-0500"
+fmtLocalTime :: String -> String
+fmtLocalTime s = if length s >= 16 then take 5 (drop 11 s) else s
+
 styles = mconcat
-    [ "button { font-size: large; margin: 2pt 8pt; }"
-    , "textview { font-size: 25px; }"
+    [ "window { background-color: #0d1117; }"
+    , "box#header { background-color: #161b22; padding: 20px 24px; }"
+    , "label#temp { font-size: 64px; font-weight: 900; color: #58a6ff; }"
+    , "label#phrase { font-size: 15px; color: #8b949e; }"
+    , "label#feelslike { font-size: 12px; color: #6e7681; }"
+    , "label#location { font-size: 11px; color: #484f58; }"
+    , "button#close { color: #6e7681; font-size: 16px; background: transparent; border: 1px solid #30363d; border-radius: 6px; padding: 2px 8px; }"
+    , "button#close:hover { color: #f85149; border-color: #f85149; }"
+    , "box.card { background-color: #161b22; border-radius: 6px; padding: 10px; margin: 4px; }"
+    , "label.mname { font-size: 9px; color: #484f58; font-weight: bold; }"
+    , "label.mval { font-size: 18px; font-weight: bold; color: #c9d1d9; }"
     ]
 
-textViewGetValue tv = do
-    buf <- Gtk.textViewGetBuffer tv
-    start <- Gtk.textBufferGetStartIter buf
-    end <- Gtk.textBufferGetEndIter buf
-    Gtk.textBufferGetText buf start end True
+makeCard :: String -> IO (Gtk.Box, Gtk.Label)
+makeCard title = do
+  card <- Gtk.boxNew Gtk.OrientationVertical 2
+  ctx <- Gtk.widgetGetStyleContext card
+  Gtk.styleContextAddClass ctx (pack "card")
+  nl <- Gtk.labelNew (Just $ pack title)
+  nctx <- Gtk.widgetGetStyleContext nl
+  Gtk.styleContextAddClass nctx (pack "mname")
+  Gtk.labelSetXalign nl 0
+  vl <- Gtk.labelNew (Just $ pack "\8212")
+  vctx <- Gtk.widgetGetStyleContext vl
+  Gtk.styleContextAddClass vctx (pack "mval")
+  Gtk.labelSetXalign vl 0
+  Gtk.boxPackStart card nl False False 0
+  Gtk.boxPackStart card vl False False 0
+  return (card, vl)
 
 main :: IO ()
 main = do
   Gtk.init Nothing
 
-  home <- getHomeDirectory
-  user <- getEffectiveUserName
-
   win <- Gtk.windowNew Gtk.WindowTypeToplevel
-  Gtk.setContainerBorderWidth win 10
+  Gtk.setContainerBorderWidth win 0
   Gtk.setWindowTitle win "Weather"
   Gtk.setWindowResizable win False
-  Gtk.setWindowDefaultWidth win 750
-  Gtk.setWindowDefaultHeight win 225
+  Gtk.setWindowDefaultWidth win 920
+  Gtk.setWindowDefaultHeight win 520
   Gtk.setWindowWindowPosition win Gtk.WindowPositionCenter
   Gtk.windowSetDecorated win False
 
@@ -408,61 +380,99 @@ main = do
   Gtk.cssProviderLoadFromData css styles
   Gtk.styleContextAddProviderForScreen screen css (fromIntegral Gtk.STYLE_PROVIDER_PRIORITY_USER)
 
-  img1 <- Gtk.imageNewFromFile $ home ++ "/.local/img/cancel.png"
+  -- Close button
+  closeBtn <- Gtk.buttonNew
+  Gtk.buttonSetRelief closeBtn Gtk.ReliefStyleNone
+  Gtk.buttonSetLabel closeBtn (pack "\x2715")
+  Gtk.widgetSetName closeBtn (pack "close")
+  on closeBtn #clicked $ Gtk.widgetDestroy win
 
-  label1 <- Gtk.labelNew Nothing
-  Gtk.labelSetMarkup label1 ("<b>" <> "Done" <> "</b>")
+  -- Header labels (placeholders updated after data loads)
+  tempLabel <- Gtk.labelNew (Just $ pack "\8212")
+  Gtk.widgetSetName tempLabel (pack "temp")
+  Gtk.labelSetXalign tempLabel 0
+  Gtk.labelSetYalign tempLabel 0.5
 
-  -- input <- Gtk.entryNew
-  -- dialog <- Gtk.dialogNew
-  -- comboBox <- Gtk.comboBoxNew
-  -- blackRgba                         <- newZeroRGBA
-  -- whiteRgba                         <- newZeroRGBA
-  -- _                                 <- rGBAParse blackRgba "rgba(0,0,0,1.0)"
-  -- _                                 <- rGBAParse whiteRgba "rgba(255,255,255,1.0)"
+  phraseLabel <- Gtk.labelNew (Just $ pack "Loading...")
+  Gtk.widgetSetName phraseLabel (pack "phrase")
+  Gtk.labelSetXalign phraseLabel 0
 
-  lonLat <- Gtk.textViewNew
-  Gtk.textViewSetEditable lonLat True
-  textBufferLonLat <- Gtk.getTextViewBuffer lonLat
-  Gtk.textBufferSetText textBufferLonLat "45.18,-93.32" (-1)
+  feelsLabel <- Gtk.labelNew (Just $ pack "")
+  Gtk.widgetSetName feelsLabel (pack "feelslike")
+  Gtk.labelSetXalign feelsLabel 0
 
-  data1 <- textViewGetValue lonLat
-  print data1
+  locationLabel <- Gtk.labelNew (Just $ pack "Coon Rapids, MN  45.18, -93.32")
+  Gtk.widgetSetName locationLabel (pack "location")
+  Gtk.labelSetXalign locationLabel 0
 
-  textView <- Gtk.textViewNew
-  Gtk.textViewSetEditable textView False
+  infoBox <- Gtk.boxNew Gtk.OrientationVertical 4
+  Gtk.boxPackStart infoBox tempLabel False False 0
+  Gtk.boxPackStart infoBox phraseLabel False False 0
+  Gtk.boxPackStart infoBox feelsLabel False False 0
+  Gtk.boxPackStart infoBox locationLabel False False 0
+  Gtk.widgetSetHexpand infoBox True
 
-  textBuffer <- Gtk.getTextViewBuffer textView
-  box <- Gtk.boxNew Gtk.OrientationHorizontal 0
+  rightBox <- Gtk.boxNew Gtk.OrientationVertical 0
+  Gtk.boxPackStart rightBox closeBtn False False 0
 
-  Gtk.setBoxHomogeneous box False
-  Gtk.boxPackStart box textView True True 0
+  header <- Gtk.boxNew Gtk.OrientationHorizontal 0
+  Gtk.widgetSetName header (pack "header")
+  Gtk.boxPackStart header infoBox True True 0
+  Gtk.boxPackStart header rightBox False False 0
 
-  btn1 <- Gtk.buttonNew
-  Gtk.buttonSetRelief btn1 Gtk.ReliefStyleNone
-  Gtk.buttonSetImage btn1 $ Just img1
-  Gtk.widgetSetHexpand btn1 False
-  on btn1 #clicked $ do
-    putStrLn "User chose: Done"
-    Gtk.widgetDestroy win
+  -- Metric cards (4 columns x 4 rows)
+  (windSpeedCard, windSpeedLbl) <- makeCard "WIND SPEED"
+  (windGustCard,  windGustLbl)  <- makeCard "WIND GUST"
+  (windDirCard,   windDirLbl)   <- makeCard "WIND DIR"
+  (windChillCard, windChillLbl) <- makeCard "WIND CHILL"
+  (pressureCard,  pressureLbl)  <- makeCard "PRESSURE"
+  (dewPointCard,  dewPointLbl)  <- makeCard "DEW POINT"
+  (heatIndexCard, heatIndexLbl) <- makeCard "HEAT INDEX"
+  (humidityCard,  humidityLbl)  <- makeCard "HUMIDITY"
+  (uvIndexCard,   uvIndexLbl)   <- makeCard "UV INDEX"
+  (uvCard,        uvLbl)        <- makeCard "UV"
+  (cloudCard,     cloudLbl)     <- makeCard "CLOUD COVER"
+  (visCard,       visLbl)       <- makeCard "VISIBILITY"
+  (sunriseCard,   sunriseLbl)   <- makeCard "SUNRISE"
+  (sunsetCard,    sunsetLbl)    <- makeCard "SUNSET"
+  (moonriseCard,  moonriseLbl)  <- makeCard "MOON RISE"
+  (moonsetCard,   moonsetLbl)   <- makeCard "MOON SET"
+
+  metricsGrid <- Gtk.gridNew
+  Gtk.gridSetColumnSpacing metricsGrid 0
+  Gtk.gridSetRowSpacing metricsGrid 0
+  Gtk.gridSetColumnHomogeneous metricsGrid True
+
+  #attach metricsGrid windSpeedCard 0 0 1 1
+  #attach metricsGrid windGustCard  1 0 1 1
+  #attach metricsGrid windDirCard   2 0 1 1
+  #attach metricsGrid windChillCard 3 0 1 1
+
+  #attach metricsGrid pressureCard  0 1 1 1
+  #attach metricsGrid dewPointCard  1 1 1 1
+  #attach metricsGrid heatIndexCard 2 1 1 1
+  #attach metricsGrid humidityCard  3 1 1 1
+
+  #attach metricsGrid uvIndexCard   0 2 1 1
+  #attach metricsGrid uvCard        1 2 1 1
+  #attach metricsGrid cloudCard     2 2 1 1
+  #attach metricsGrid visCard       3 2 1 1
+
+  #attach metricsGrid sunriseCard   0 3 1 1
+  #attach metricsGrid sunsetCard    1 3 1 1
+  #attach metricsGrid moonriseCard  2 3 1 1
+  #attach metricsGrid moonsetCard   3 3 1 1
+
+  mainBox <- Gtk.boxNew Gtk.OrientationVertical 0
+  Gtk.boxPackStart mainBox header False False 0
+  Gtk.boxPackStart mainBox metricsGrid True True 8
+
+  #add win mainBox
 
   on win #keyPressEvent $ \keyEvent -> do
     key <- keyEvent `Data.GI.Base.get` #keyval >>= keyvalToUnicode
-    putStrLn $ "Key pressed: (" ++ show key ++ ")"
     if key == 27 then Gtk.mainQuit else pure ()
     return False
-
-  grid <- Gtk.gridNew
-  Gtk.gridSetColumnSpacing grid 10
-  Gtk.gridSetRowSpacing grid 10
-  Gtk.gridSetColumnHomogeneous grid True
-
-  #attach grid btn1   0 0 1 1
-  #attach grid label1 0 1 1 1
-  #attach grid box 0 2 1 1
-  #attach grid lonLat 0 3 1 1
-
-  #add win grid
 
   Gtk.onWidgetDestroy win Gtk.mainQuit
   #showAll win
@@ -470,32 +480,29 @@ main = do
   astroObs <- getAstroObservation
   obs <- getWeatherObservation
 
-  let temperature = "Temperature: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.temperature |])  ++ "\n"
-  let pressure = "Pressure: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.pressureAltimeter |]) ++ "\n"
-  let windChill = "WindChill: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.temperatureWindChill |]) ++ "\n"
-  let windGust = "WindGust: " ++ show (fromIntJust (head [Data.Aeson.Schema.get| obs.values[].currentObservation.windGust |])) ++ "\n"
-  let windSpeed = "WindSpeed: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.windSpeed |]) ++ "\n"
-  let heatIndex = "HeatIndex: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.temperatureHeatIndex |]) ++ "\n"
-  let dewPoint = "DewPoint: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.temperatureDewPoint |]) ++ "\n"
-  let precip1Hour = "Precipitation1: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.precip1Hour |]) ++ "\n"
-  let precip6Hour = "Precipitation6: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.precip6Hour |]) ++ "\n"
-  let precip24Hour = "Precipitation24: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.precip24Hour |]) ++ "\n"
-  let sunRise = "Sunrise: " ++ unpack (head [Data.Aeson.Schema.get| obs.values[].currentObservation.sunriseTimeLocal |]) ++ "\n"
-  let sunSet = "Sunset: " ++ unpack(head [Data.Aeson.Schema.get| obs.values[].currentObservation.sunsetTimeLocal |]) ++ "\n"
-  let phrase = "Phrase: " ++ unpack (head [Data.Aeson.Schema.get| obs.values[].currentObservation.wxPhraseLong |]) ++ "\n"
-  let uv = "UV: " ++  unpack (head [Data.Aeson.Schema.get| obs.values[].currentObservation.uvDescription |]) ++ "\n"
-  let uvIndex = "UV Index: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.uvIndex |]) ++ "\n"
-  let windDirection = "Wind Direction: " ++ unpack (head [Data.Aeson.Schema.get| obs.values[].currentObservation.windDirectionCardinal |]) ++ "\n"
-  let feelsLike = "FeelsLike: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.temperatureFeelsLike |]) ++ "\n"
-  let pressureTendency = "Pressure Tendency: " ++ unpack (head [Data.Aeson.Schema.get| obs.values[].currentObservation.pressureTendencyTrend |]) ++ "\n"
-  let cloudCover = "Cloud Cover: " ++ unpack (head [Data.Aeson.Schema.get| obs.values[].currentObservation.cloudCoverPhrase |]) ++ "\n"
-  let snow1Hour = "Snow1Hour: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.snow1Hour |]) ++ "\n"
-  let snow6Hour = "snow6Hour: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.snow6Hour |]) ++ "\n"
-  let snow24Hour = "snow24Hour: " ++ show (head [Data.Aeson.Schema.get| obs.values[].currentObservation.snow24Hour |]) ++ "\n"
-  let moonRise = "Moon Rise: " ++ unpack (head [Data.Aeson.Schema.get| astroObs.astroData[].moon.riseSet.riseLocal |]) ++ "\n"
-  let moonSet = "Moon Set: " ++ unpack (head [Data.Aeson.Schema.get| astroObs.astroData[].moon.riseSet.setLocal |]) ++ "\n"
+  let tempVal    = show (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.temperature |])
+  let phraseVal  = unpack (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.wxPhraseLong |])
+  let feelsVal   = show (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.temperatureFeelsLike |])
 
-  let myData = temperature ++ pressure ++ windChill ++ windGust ++ windSpeed ++ heatIndex ++ dewPoint ++ precip1Hour ++ precip6Hour ++ precip24Hour ++ sunRise ++ sunSet ++ phrase ++ uv ++ uvIndex ++ windDirection ++ feelsLike ++ pressureTendency ++ cloudCover ++ snow1Hour ++ snow6Hour ++ snow24Hour ++ moonRise ++ moonSet
-  --
-  Gtk.textBufferSetText textBuffer (pack myData) (-1)
+  Gtk.labelSetMarkup tempLabel   (pack tempVal)
+  Gtk.labelSetMarkup phraseLabel (pack phraseVal)
+  Gtk.labelSetMarkup feelsLabel  (pack $ "Feels like " ++ feelsVal ++ "\xb0F")
+
+  Gtk.labelSetMarkup windSpeedLbl (pack $ show (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.windSpeed |]) ++ " mph")
+  Gtk.labelSetMarkup windGustLbl  (pack $ show (fromIntJust (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.windGust |])) ++ " mph")
+  Gtk.labelSetMarkup windDirLbl   (pack $ unpack (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.windDirectionCardinal |]) ++ "  " ++ show (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.windDirection |]) ++ "\xb0")
+  Gtk.labelSetMarkup windChillLbl (pack $ show (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.temperatureWindChill |]) ++ "\xb0F")
+  Gtk.labelSetMarkup pressureLbl  (pack $ show (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.pressureAltimeter |]) ++ " inHg")
+  Gtk.labelSetMarkup dewPointLbl  (pack $ show (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.temperatureDewPoint |]) ++ "\xb0F")
+  Gtk.labelSetMarkup heatIndexLbl (pack $ show (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.temperatureHeatIndex |]) ++ "\xb0F")
+  Gtk.labelSetMarkup humidityLbl  (pack $ show (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.relativeHumidity |]) ++ "%")
+  Gtk.labelSetMarkup uvIndexLbl   (pack $ show (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.uvIndex |]))
+  Gtk.labelSetMarkup uvLbl        (pack $ unpack (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.uvDescription |]))
+  Gtk.labelSetMarkup cloudLbl     (pack $ unpack (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.cloudCoverPhrase |]))
+  Gtk.labelSetMarkup visLbl       (pack $ show (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.visibility |]) ++ " mi")
+  Gtk.labelSetMarkup sunriseLbl   (pack $ fmtLocalTime $ unpack (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.sunriseTimeLocal |]))
+  Gtk.labelSetMarkup sunsetLbl    (pack $ fmtLocalTime $ unpack (firstOf [Data.Aeson.Schema.get| obs.values[].currentObservation.sunsetTimeLocal |]))
+  Gtk.labelSetMarkup moonriseLbl  (pack $ fmtLocalTime $ unpack (firstOf [Data.Aeson.Schema.get| astroObs.astroData[].moon.riseSet.riseLocal |]))
+  Gtk.labelSetMarkup moonsetLbl   (pack $ fmtLocalTime $ unpack (firstOf [Data.Aeson.Schema.get| astroObs.astroData[].moon.riseSet.setLocal |]))
+
   Gtk.main

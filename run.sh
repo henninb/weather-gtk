@@ -41,8 +41,8 @@ else
 fi
 
 hlint src/Main.hs
-# stack build
-stack install
-# stack run
+stack build
+#stack install
+stack run
 
 exit 0
